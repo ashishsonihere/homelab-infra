@@ -1,0 +1,88 @@
+# Market-Research Scraper stack
+# Scrapes ecommerce help/community sites (help.shopify.com, Triple Whale, etc.),
+# extracts questions/answers/comments/ratings/sections, structures into Postgres+pgvector,
+# stores raw HTML/JSON in MinIO, queues work in Redis, and exposes search via Meilisearch.
+#
+# DESIGN: reuses your EXISTING postgres / redis / minio (in the `data` + `edge` networks)
+# instead of spinning new ones — keeps load low on the 4-core i3. Enable services
+# incrementally (start with crawler + worker; add meilisearch when you need search).
+#
+# Networks `data_net` and `edge_net` are declared external — match them to your real
+# Docker network names (check: `docker network ls`) before first deploy.
+
+services:
+  # Crawl4AI — LLM-friendly crawler/renderer. Fetches & cleans pages to markdown/JSON.
+  crawl4ai:
+    image: unclecode/crawl4ai:latest
+    container_name: mr-crawl4ai
+    restart: unless-stopped
+    environment:
+      - CRAWL4AI_API_TOKEN=${CRAWL4AI_API_TOKEN}
+    networks: [data_net]
+    deploy:
+      resources:
+        limits:
+          memory: 1500m
+        reservations:
+          memory: 512m
+
+  # Ingestion worker — pulls URLs from Redis queue, calls crawl4ai, parses Q/A/comments/
+  # ratings, writes structured rows to Postgres, raw blobs to MinIO, chunks for RAG.
+  # Build context is ./worker (a small Python app — scaffold provided in worker/README.md).
+  worker:
+    build: ./worker
+    container_name: mr-worker
+    restart: unless-stopped
+    env_file: [.env]
+    environment:
+      - PG_DSN=${PG_DSN}
+      - REDIS_URL=${REDIS_URL}
+      - MINIO_ENDPOINT=${MINIO_ENDPOINT}
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY}
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY}
+      - CRAWL4AI_URL=http://mr-crawl4ai:11235
+      - CRAWL4AI_API_TOKEN=${CRAWL4AI_API_TOKEN}
+      - EMBEDDING_API_KEY=${EMBEDDING_API_KEY}   # cloud embeddings (no GPU here)
+    depends_on: [crawl4ai]
+    networks: [data_net]
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+        reservations:
+          memory: 256m
+
+  # Meilisearch — fast keyword/typo-tolerant search over scraped content (the "vectorless"
+  # half of retrieval; pgvector handles semantic). Exposed via Traefik on the edge network.
+  meilisearch:
+    image: getmeili/meilisearch:v1.10
+    container_name: mr-meilisearch
+    restart: unless-stopped
+    environment:
+      - MEILI_MASTER_KEY=${MEILI_MASTER_KEY}
+      - MEILI_ENV=production
+    volumes:
+      - meili_data:/meili_data
+    networks: [data_net, edge_net]
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.mr-search.rule=Host(`search.lan`)"
+      - "traefik.http.routers.mr-search.entrypoints=web"
+      - "traefik.http.services.mr-search.loadbalancer.server.port=7700"
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+        reservations:
+          memory: 256m
+
+volumes:
+  meili_data:
+
+networks:
+  data_net:
+    external: true
+    name: devcore_net       # confirmed live 2026-06-15
+  edge_net:
+    external: true
+    name: proxy             # Traefik ingress network

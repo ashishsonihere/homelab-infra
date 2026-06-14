@@ -1,0 +1,23 @@
+# SOPS configuration — controls how secrets are encrypted in this repo.
+#
+# BEFORE FIRST USE:
+#   1. Install age + sops on your laptop AND the server.
+#   2. Generate a keypair:  age-keygen -o ~/.config/sops/age/keys.txt
+#      It prints a public key like: age1qxyz... (the "recipient").
+#   3. Paste that public key into the `age:` field below (replace the placeholder).
+#   4. Copy the SAME keys.txt to the server at ~/.config/sops/age/keys.txt (chmod 600).
+#
+# Encrypt a file:   sops --encrypt --in-place stacks/<stack>/secrets.env
+# Edit encrypted:   sops stacks/<stack>/secrets.env
+# Decrypt on server: handled by scripts/deploy.sh
+#
+# Only files matching these path_regex rules get encrypted. We encrypt files named
+# `secrets.env` (committed encrypted). `.env.example` files stay plaintext (templates only).
+
+creation_rules:
+  - path_regex: secrets\.env$
+    age: >-
+      age1REPLACE_WITH_YOUR_PUBLIC_KEY_FROM_age-keygen
+  - path_regex: \.secrets\.ya?ml$
+    age: >-
+      age1REPLACE_WITH_YOUR_PUBLIC_KEY_FROM_age-keygen

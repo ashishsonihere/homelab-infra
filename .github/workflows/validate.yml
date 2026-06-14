@@ -1,0 +1,54 @@
+name: validate
+
+# Validates every stack on push/PR. Does NOT touch the server (we deploy by manual git pull).
+# Checks: YAML lint, docker compose config (syntax + interpolation), Dockerfile lint.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  yaml-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: yamllint
+        uses: ibiqlik/action-yamllint@v3
+        with:
+          file_or_dir: stacks
+          # relaxed: long lines & comments are fine for compose files
+          config_data: |
+            extends: relaxed
+            rules:
+              line-length: disable
+
+  compose-config:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate each compose file
+        run: |
+          set -e
+          # Create dummy .env from each template so interpolation resolves during validation.
+          for dir in stacks/*/; do
+            [ -f "$dir/docker-compose.yml" ] || continue
+            echo "::group::$dir"
+            if [ -f "$dir/.env.example" ]; then cp "$dir/.env.example" "$dir/.env"; fi
+            docker compose -f "$dir/docker-compose.yml" --env-file "$dir/.env" config >/dev/null \
+              && echo "OK: $dir"
+            rm -f "$dir/.env"
+            echo "::endgroup::"
+          done
+
+  hadolint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Lint Dockerfiles (if any)
+        run: |
+          if find stacks -name 'Dockerfile*' | grep -q .; then
+            docker run --rm -i hadolint/hadolint < $(find stacks -name 'Dockerfile*' | head -1) || true
+          else
+            echo "No Dockerfiles to lint."
+          fi

@@ -1,0 +1,30 @@
+# === SECRETS — never commit plaintext ===
+# Real env files (only *.env.example is allowed in git)
+*.env
+!*.env.example
+.env
+!.env.example
+
+# age / SOPS private keys — NEVER commit these
+*.agekey
+key.txt
+keys.txt
+age-key*.txt
+*.key
+
+# Decrypted secret outputs
+secrets.dec.*
+*.dec.yaml
+*.dec.yml
+
+# === Local junk ===
+.DS_Store
+Thumbs.db
+*.log
+*.bak
+*.tmp
+
+# Docker / runtime data that should live on the server, not in git
+data/
+volumes/
+*.sqlite
