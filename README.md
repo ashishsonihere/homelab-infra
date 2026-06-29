@@ -1,63 +1,68 @@
-# homelab-infra (GitOps)
+# homelab-infra
 
-Declarative config for the Proxmox homelab. Edit here → push → pull on the server → deploy.
+Self-hosted market-research data warehouse + 5-tier analysis pipeline that scrapes real customer pain points (Reddit, app-store reviews, forums, YouTube), supply/competition signals (SaaS directories, app stores, funding data), and runs a funnel from 10M+ raw signals to scored SaaS opportunities.
 
-## Structure
+## What's here
 
 ```
 homelab-infra/
-├── .sops.yaml                  # secrets encryption rules (age recipient)
-├── .gitignore                  # blocks plaintext .env / age keys
-├── .github/workflows/validate.yml   # CI: yamllint + compose config + hadolint
-├── scripts/deploy.sh           # run ON THE SERVER: pulls + decrypts + deploys a stack
-└── stacks/
-    ├── data/                   # postgres(pgvector) + redis + admin UIs  (EXISTING)
-    ├── market-research/        # NEW: ecommerce community scraper → KB / research
-    └── career-ops/             # job-search tool (runs in Claude Code)
+  stacks/
+    market-research/        # the main project
+      worker/               # Python connectors + analysis pipeline
+        connectors/         # 20+ source scrapers (Reddit, app stores, SaaS dirs, YouTube, funding)
+        analysis/           # 5-tier funnel (Tier-0 lexical → Tier-3 LLM → Tier-4 scoring)
+        tests/              # 129 unit tests (FakeCursor idempotency, LLM mock, CF block handling)
+        db/                 # schema DDL
+      docker-compose.yml    # profiles: always-on (shards), oneshot (connectors), analysis (tier3/4)
+      AGENTS.md             # project memory (read by all AI agents)
+      DATA-DICTIONARY.md    # every table, exact counts, KEEP/DROP
+      migrations/           # SQL migrations
+  .github/workflows/        # CI (ruff lint + format + pytest)
 ```
 
-Each stack folder has: `docker-compose.yml`, `.env.example` (template, committed), and
-`secrets.env` (SOPS-encrypted, committed). The real plaintext `secrets.env` is decrypted only
-on the server at deploy time and is git-ignored.
+## The pipeline
 
-## One-time setup
+1. **Ingest** — Python connectors scrape 18+ sources into Postgres: Reddit (28M rows via Arctic Shift API), app-store reviews (App Store, Google Play, Shopify), SaaS directories (TrustRadius, SaaSHub, AlternativeTo), YouTube transcripts, funding data (YC, Crunchbase). All use `curl_cffi` for TLS fingerprinting, residential proxies for anti-bot bypass, and idempotent `ON CONFLICT` upserts.
 
-### On laptop + server
-```bash
-# install tools (server is Debian/Proxmox):
-apt install -y age            # or: brew install age   (laptop)
-# install sops from https://github.com/getsops/sops/releases
+2. **Store** — Postgres 16 with schemas `public` (raw data + dimensions) and `analysis` (the funnel).
 
-# generate ONE age keypair (do this on the laptop):
-mkdir -p ~/.config/sops/age
-age-keygen -o ~/.config/sops/age/keys.txt        # prints public key age1...
-```
-1. Put the printed **public key** into `.sops.yaml` (replace the placeholder).
-2. Copy `keys.txt` to the **server** at `~/.config/sops/age/keys.txt` (`chmod 600`). This is the
-   only secret that lives outside git — guard it (and back it up offline).
+3. **Analyze** — A 5-tier funnel:
+   - **Tier-0**: SQL lexical filter → 10.3M `pain_signals` (lexicon hits, question-shape, engagement)
+   - **Tier-1/2**: Embeddings + clustering (ABANDONED — CPU-infeasible on 4-core box)
+   - **Tier-3**: DeepSeek-V3 groups top pain signals into `problem_statements` (Pydantic-validated, ~$0.12/run)
+   - **Tier-4**: DeepSeek validates statements → `opportunities` with 3-axis score (wedge .5 / wave .3 / edge .2, saturation hard-gate)
 
-### Git init + push
-```bash
-cd C:\Users\ashis\homelab\homelab-infra
-git init -b main
-git add .
-git commit -m "chore: initial GitOps scaffold"
-# create a PRIVATE repo on GitHub, then:
-git remote add origin git@github.com:<you>/homelab-infra.git
-git push -u origin main
-```
+4. **Score** — `final_score = 0.5*wedge + 0.3*wave + 0.2*edge`; `saturation_ok=false → final_score=0` (hard gate if 3+ funded incumbents on exact ICP).
 
-## Daily flow (manual pull — our chosen start)
+## Tech stack
+
+- **Postgres 16** (pgvector for embeddings, halfvec for Matryoshka)
+- **Python 3.12** (httpx, curl_cffi, selectolax, yt-dlp, pydantic, psycopg2)
+- **Docker** (compose with profiles: always-on, oneshot, analysis)
+- **OpenRouter** (DeepSeek-V3 for bulk LLM, Claude Sonnet for judgment)
+- **129 unit tests** (FakeCursor idempotency, LLM mock, Cloudflare block handling)
+
+## Quickstart
 
 ```bash
-# 1. On laptop: edit a stack, encrypt any new secret, commit, push
-sops --encrypt --in-place stacks/market-research/secrets.env   # if you changed secrets
-git commit -am "feat(market-research): add crawler service" && git push
+# Run the analysis funnel
+docker compose --profile analysis run --rm mr-tier3
+docker compose --profile analysis run --rm mr-tier4
 
-# 2. On server (ssh devcore): pull + deploy
-cd ~/homelab-infra && git pull
-bash scripts/deploy.sh market-research
+# Run a scraper
+docker compose --profile oneshot run --rm mr-worker-scrape python -m connectors.saas_reviews
+
+# Run tests
+cd stacks/market-research/worker
+pip install -r requirements.txt pytest
+pytest -q --ignore=tests/test_analysis.py
 ```
 
-CI runs on every push and blocks merges if a compose file or Dockerfile is invalid.
-Graduate to a self-hosted GitHub Actions runner later to auto-deploy on push.
+## Status
+
+- 10.3M pain signals filtered and scored
+- 28M Reddit rows (posts + comments) across 89 subreddits
+- 278K documents from 18 sources
+- 5,991 funded companies + 66 VC firms
+- 129 unit tests, all passing
+- CI: ruff lint + format + pytest

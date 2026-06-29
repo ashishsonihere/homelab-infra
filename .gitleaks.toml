@@ -1,0 +1,31 @@
+title = "homelab-infra gitleaks config"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "openrouter-api-key"
+description = "OpenRouter API key"
+regex = '''sk-or-v1-[a-zA-Z0-9-_]{40,}'''
+tags = ["key", "openrouter"]
+
+[[rules]]
+id = "postgres-connection-string"
+description = "PostgreSQL connection string with credentials"
+regex = '''postgresql://[^:]+:[^@]+@[^/]+/\w+'''
+tags = ["key", "database"]
+
+[[rules]]
+id = "brightdata-token"
+description = "Bright Data API token"
+regex = '''d[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'''
+tags = ["key", "brightdata"]
+
+[allowlist]
+description = "Allowlisted paths"
+paths = [
+  '''\.env\.example$''',
+  '''node_modules/''',
+  '''\.venv/''',
+  '''__pycache__/''',
+]
