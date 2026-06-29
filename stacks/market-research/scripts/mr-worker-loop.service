@@ -1,0 +1,18 @@
+[Unit]
+Description=Market-Research Worker Loop (Postgres queue + OpenCode headless)
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/opt/market-research/scripts/worker_loop.sh
+Restart=always
+RestartSec=10
+MemoryMax=2G
+CPUQuota=200%
+NoNewPrivileges=true
+WorkingDirectory=/opt/homelab-infra
+
+[Install]
+WantedBy=multi-user.target
