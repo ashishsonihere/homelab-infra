@@ -1,12 +1,41 @@
-# Market-Research stack — ONE place for all mr-* services (consolidation; supersedes the old
-# crawl4ai/meili scaffold which was never used). Postgres + Redis are shared homelab infra
-# (devcore-postgres / devcore-redis) on devcore_net — referenced, not redefined.
+# =============================================================================
+# Market-Research stack — ONE place for all mr-* services.
+# Postgres (devcore-postgres) + Redis (devcore-redis) are shared homelab infra
+# on the external `devcore_net` network — referenced, NOT redefined here.
+# Secrets live ONLY in /opt/market-research/worker.env (SOPS+age on the server);
+# no secret values appear in this file. Subreddit lists + date params are public
+# tuning data, so they are inline per shard.
 #
-# Long-lived SERVICES live here. One-shot JOBS (connectors, analysis) run via the `worker` image:
-#     docker compose -p market-research run --rm worker python -m connectors.<name>
-#     docker compose -p market-research run --rm worker python analyze.py
-# DEPLOY in the housekeeping window (after in-flight backfills finish) so mr-ollama isn't restarted mid-run:
-#     docker compose -p market-research up -d ollama metabase
+# PROFILES (Docker Compose v2):
+#   always-on   Long-lived services brought up with `up -d`:
+#               3 Reddit backfill shards (mr-reddit-e/d/fix), the daily top-up
+#               (mr-reddit-daily), mr-ollama (local embeddings), mr-metabase.
+#               -> docker compose --profile always-on up -d
+#   oneshot     Connector + migration jobs run ad-hoc / via cron, self-remove:
+#               mr-worker-scrape (Dockerfile.scrape), mr-worker-lite (Dockerfile.lite),
+#               mr-db-wait (readiness gate, see below).
+#               -> docker compose --profile oneshot run --rm mr-worker-scrape python -m connectors.NAME
+#               -> docker compose --profile oneshot run --rm mr-worker-lite  python -m connectors.NAME
+#               Clean up the readiness gate + any leftovers afterwards:
+#               -> docker compose --profile oneshot down   (only touches oneshot-profile containers)
+#   analysis    Tier-3/4 LLM funnel jobs (run-to-completion, --rm):
+#               -> docker compose --profile analysis run --rm mr-tier3
+#               -> docker compose --profile analysis run --rm mr-tier4
+#               -> docker compose --profile analysis down
+#
+# DEPLOY in the housekeeping window (after in-flight backfills finish) so
+# mr-ollama isn't restarted mid-embed:
+#   docker compose --profile always-on up -d
+# NOTE: plain `docker compose up -d` (no --profile) starts NOTHING now, because
+# every service belongs to a profile. Always pass --profile.
+#
+# DB READINESS: devcore-postgres is external (another compose project), so it
+# cannot be a `depends_on` target directly. DB-dependent oneshot/analysis jobs
+# instead depend on `mr-db-wait`, a tiny postgres:16-slim container that polls
+# `pg_isready` and reports a healthcheck; `depends_on: condition: service_healthy`
+# blocks the job until the DB is reachable, then the job runs.
+# =============================================================================
+
 name: market-research
 
 networks:
@@ -17,35 +46,185 @@ volumes:
   mr_ollama:
   mr_metabase:
 
+# --- Shared base for the 3 Reddit backfill shards (parameterized services) ---
+# Only AS_SUBREDDITS + AS_RESUME differ per shard, so each shard overrides
+# `environment` fully (YAML merge keys do not deep-merge nested maps).
+x-reddit-shard: &reddit-shard
+  image: mr-worker:scrape
+  profiles: ["always-on"]
+  restart: unless-stopped
+  working_dir: /app
+  command: ["python", "-m", "connectors.arctic_reddit"]
+  env_file: /opt/market-research/worker.env
+  volumes:
+    - ./worker:/app
+    - /opt/market-research:/mr
+  networks: [devcore_net]
+  mem_limit: 1g
+  memswap_limit: 1g
+  cpus: 1
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
 services:
-  worker:                       # image for ALL connectors + jobs (run-and-exit, not kept up)
+  # ---- Profile: always-on -------------------------------------------------
+
+  mr-reddit-e:                       # 23 subs — entrepreneurship / freelance / analytics
+    <<: *reddit-shard
+    container_name: mr-reddit-e
+    environment:
+      AS_SUBREDDITS: "buildinpublic,Buildwithreddit,indiebiz,advancedentrepreneur,Business_Ideas,business,freelance,venturecapital,ladybusiness,roastmystartup,alphaandbetausers,ycombinator,selfhosted,ExperiencedDevs,MarketingAnalytics,dataanalysis,BusinessIntelligence,marketingagency,digitalagency,dropshippingindia,IndianStreetBets,beermoneyindia,3dprintIndia"
+      AS_AFTER: "2020-01-01"
+      AS_RESUME: "1"
+      AS_MAX_PER_SUB: "5000000"
+      AS_MAX_COMMENTS: "20000000"
+
+  mr-reddit-d:                       # 22 subs — AI agents / Amazon FBA / PPC marketing
+    <<: *reddit-shard
+    container_name: mr-reddit-d
+    environment:
+      AS_SUBREDDITS: "AI_Agents,AgentsOfAI,aiagents,LocalLLaMA,ArtificialInteligence,AmazonFBATips,AmazonVine,AmazonSellerUS,OnlineSelling,wholesale,AmazonWholesale,FBA,PPCMarketing,programmatic,marketingautomation,AskMarketing,performancemarketing,FacebookMarketing,b2bmarketing,leadgeneration,SaaSMarketing,agencylife"
+      AS_AFTER: "2020-01-01"
+      AS_RESUME: "1"
+      AS_MAX_PER_SUB: "5000000"
+      AS_MAX_COMMENTS: "20000000"
+
+  mr-reddit-fix:                     # 12 subs — gap-fill shard (AS_RESUME=0 => full re-walk, idempotent)
+    <<: *reddit-shard
+    container_name: mr-reddit-fix
+    environment:
+      AS_SUBREDDITS: "Entrepreneur,microsaas,ecommercemarketing,agency,indiehackers,FacebookAds,smallbusinessindia,shopifyDev,B2BSaaS,TikTokMarketing,cro,AmazonFBAOnlineRetail"
+      AS_AFTER: "2020-01-01"
+      AS_RESUME: "0"
+      AS_MAX_PER_SUB: "5000000"
+      AS_MAX_COMMENTS: "20000000"
+
+  mr-reddit-daily:                   # daily top-up of new posts across the full sub set (resume mode)
+    <<: *reddit-shard
+    container_name: mr-reddit-daily
+    environment:
+      AS_SUBREDDITS: "adops,advancedentrepreneur,advertising,Affiliatemarketing,agency,AgentsOfAI,aiagents,AI_Agents,alphaandbetausers,AmazonFBA,AmazonFBAOnlineRetail,AmazonMerch,AmazonSeller,analytics,ArtificialInteligence,B2BSaaS,bigcommerce,bigseo,buildinpublic,Buildwithreddit,business,Business_Ideas,content_marketing,copywriting,cro,digital_marketing,DigitalMarketing,DigitalMarketingIndia,dropservicing,dropship,dropshipping,eBaySellers,ecommerce,ecommercemarketing,Emailmarketing,Entrepreneur,EntrepreneurRideAlong,Entrepreneurship,Etsy,EtsySellers,FacebookAds,FacebookAdvertising,Flipping,freelance,FulfillmentByAmazon,googleads,GoogleAnalytics,growmybusiness,GrowthHacking,indianstartups,indiebiz,indiehackers,influencermarketing,InstagramMarketing,juststart,kickstarter,ladybusiness,LocalLLaMA,Magento,marketing,microsaas,nocode,NoCodeSaaS,OnlineBusiness,PPC,printondemand,ProductManagement,roastmystartup,SaaS,selfhosted,SEO,shopify,shopifyDev,SideProject,smallbusiness,smallbusinessindia,smallbusinessuk,socialmedia,SocialMediaMarketing,StartUpIndia,startups,sweatystartup,TechSEO,TikTokMarketing,venturecapital,webdev,woocommerce,Wordpress,ycombinator"
+      AS_AFTER: "2020-01-01"
+      AS_RESUME: "1"
+      AS_MAX_PER_SUB: "5000000"
+      AS_MAX_COMMENTS: "20000000"
+
+  ollama:                            # local embeddings (free, CPU) — connectors reach http://mr-ollama:11434
+    image: ollama/ollama
+    container_name: mr-ollama
+    profiles: ["always-on"]
+    restart: unless-stopped
+    volumes: [mr_ollama:/root/.ollama]
+    networks: [devcore_net]
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  metabase:                          # dashboards over Postgres
+    image: metabase/metabase
+    container_name: mr-metabase
+    profiles: ["always-on"]
+    restart: unless-stopped
+    ports: ["3030:3000"]
+    volumes: [mr_metabase:/metabase-data]
+    networks: [devcore_net]
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ---- Profile: oneshot ---------------------------------------------------
+
+  mr-db-wait:                        # readiness gate for the EXTERNAL devcore-postgres
+    image: postgres:16-slim
+    profiles: ["oneshot", "analysis"]
+    restart: "no"
+    networks: [devcore_net]
+    command: ["sh", "-c", "until pg_isready -h devcore-postgres -U devcore -d market_research; do echo waiting-for-db; sleep 2; done; echo db-ready; sleep 300"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h devcore-postgres -U devcore -d market_research"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+      start_period: 2s
+
+  mr-worker-scrape:                  # full image (selectolax/curl_cffi/yt-dlp/sklearn) — run + exit
     build:
       context: ./worker
       dockerfile: Dockerfile.scrape
     image: mr-worker:scrape
-    container_name: mr-worker
-    profiles: ["jobs"]          # excluded from `up`; invoked via `compose run`
+    profiles: ["oneshot"]
+    restart: "no"
     working_dir: /app
     volumes:
       - ./worker:/app
       - /opt/market-research:/mr
     env_file: /opt/market-research/worker.env
     networks: [devcore_net]
+    depends_on:
+      mr-db-wait:
+        condition: service_healthy
 
-  ollama:                       # local embeddings (free, CPU)
-    image: ollama/ollama
-    container_name: mr-ollama   # name preserved → connectors keep reaching http://mr-ollama:11434
-    restart: unless-stopped
-    volumes: [mr_ollama:/root/.ollama]
+  mr-worker-lite:                    # lite image (httpx+psycopg2) — built by compose now (was manual)
+    build:
+      context: ./worker
+      dockerfile: Dockerfile.lite
+    image: mr-worker:lite
+    profiles: ["oneshot"]
+    restart: "no"
+    working_dir: /app
+    volumes:
+      - ./worker:/app
+      - /opt/market-research:/mr
+    env_file: /opt/market-research/worker.env
     networks: [devcore_net]
+    depends_on:
+      mr-db-wait:
+        condition: service_healthy
 
-  metabase:                     # dashboards over Postgres
-    image: metabase/metabase
-    container_name: mr-metabase
-    restart: unless-stopped
-    ports: ["3030:3000"]
-    volumes: [mr_metabase:/metabase-data]
+  # ---- Profile: analysis --------------------------------------------------
+
+  mr-tier3:                          # DeepSeek extraction: pain_signals -> problem_statements
+    image: mr-worker:scrape
+    profiles: ["analysis"]
+    restart: "no"
+    working_dir: /app
+    command: ["python3", "-m", "analysis.tier3_extract"]
+    environment:
+      AN_TOP_N: "20000"
+      AN_BATCH: "200"
+    volumes:
+      - ./worker:/app
+      - /opt/market-research:/mr
+    env_file: /opt/market-research/worker.env
     networks: [devcore_net]
+    mem_limit: 3g
+    memswap_limit: 3g
+    depends_on:
+      mr-db-wait:
+        condition: service_healthy
 
-  # DROPPED: meilisearch (Postgres pg_trgm + pgvector replace it) · crawl4ai (add later, only for
-  # on-demand validation web-research of a SPECIFIC idea, not bulk collection).
+  mr-tier4:                          # 3-axis scoring + saturation gate -> opportunities
+    image: mr-worker:scrape
+    profiles: ["analysis"]
+    restart: "no"
+    working_dir: /app
+    command: ["python3", "-m", "analysis.tier4_validate"]
+    environment:
+      AN_TIER4_TOP_N: "50"
+    volumes:
+      - ./worker:/app
+      - /opt/market-research:/mr
+    env_file: /opt/market-research/worker.env
+    networks: [devcore_net]
+    mem_limit: 1g
+    memswap_limit: 1g
+    depends_on:
+      mr-db-wait:
+        condition: service_healthy
