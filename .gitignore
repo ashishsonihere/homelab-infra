@@ -48,3 +48,6 @@ seeds/*.txt
 
 # Private vault (separate repo, never push here)
 ../homelab-vault/
+
+# Analysis CONCLUSIONS stay private (live in homelab-vault, not here)
+stacks/market-research/reports/
