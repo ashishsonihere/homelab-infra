@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS analysis.pain_signals (
     created_at_src  TIMESTAMPTZ,              -- authored time (drives the time series)
     embedding       halfvec(1024),            -- qwen3-embedding:0.6b, Matryoshka-truncatable
     cluster_id      BIGINT,                   -- set in Tier 2
+    deduped         BOOLEAN DEFAULT FALSE,    -- DRIFT: added by tier1_embed.py
     ingested_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE (source, source_id)                -- idempotent re-runs
 );
@@ -48,6 +49,7 @@ CREATE TABLE IF NOT EXISTS analysis.problem_clusters (
     trend_acceleration  NUMERIC,              -- slope of quarterly member counts 2020->2026
     yoy_ratio           NUMERIC,              -- last-12mo / prior-12mo members
     centroid            halfvec(1024),
+    cluster_key         TEXT UNIQUE,           -- DRIFT: added by tier2_cluster.py
     created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 

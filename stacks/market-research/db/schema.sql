@@ -54,6 +54,7 @@ CREATE TABLE reddit_comments (
     post_id          bigint REFERENCES reddit_posts(id) ON DELETE CASCADE,
     reddit_id        varchar(15) UNIQUE NOT NULL,
     parent_reddit_id varchar(15),             -- comment id (t1_) or post id (t3_), stripped
+    parent_id        bigint REFERENCES reddit_comments(id) ON DELETE CASCADE,  -- DRIFT: added by arctic_reddit.py
     body             text,
     author           text,
     score            int,
