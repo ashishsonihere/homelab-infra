@@ -254,7 +254,7 @@ Tools that materially improve the daily workflow or unblock a mid-term Task Bloc
 ### tailscale
 
 - **What:** A WireGuard-based mesh VPN. Each machine gets a stable IP on the tailnet; traffic is end-to-end encrypted; ACLs restrict who can reach what; no port forwarding on the router.
-- **Why for this project:** Today the laptop reaches `devcore` only on LAN (`ssh devcore` -> 192.168.1.44). The founder's notes say a Mac move is coming and travel happens. Tailscale means the laptop (or phone) can reach `devcore`'s Postgres, Metabase, Grafana, and the worker-loop from anywhere - without exposing a single port on the router or punching Cloudflare tunnels for interactive SSH. Also the cleanest way to let CI runners (later) or a second box reach the server without a VPN concentrator. Install on **both** the laptop and `devcore`, auth to the same tailnet.
+- **Why for this project:** Today the laptop reaches the server only on LAN (via SSH). A Mac move is coming and travel happens. Tailscale means the laptop (or phone) can reach the server's Postgres, Metabase, Grafana, and the worker-loop from anywhere - without exposing a single port on the router or punching Cloudflare tunnels for interactive SSH. Also the cleanest way to let CI runners (later) or a second box reach the server without a VPN concentrator. Install on **both** the laptop and server, auth to the same tailnet.
 - **Install - Windows (PowerShell):**
   ```powershell
   winget install --id=Tailscale.Tailscale -e
@@ -265,7 +265,7 @@ Tools that materially improve the daily workflow or unblock a mid-term Task Bloc
   curl -fsSL https://tailscale.com/install.sh | sh
   sudo tailscale up
   ```
-- **Follow-up:** replace `192.168.1.44` in `~/.ssh/config` with the devcore tailnet IP (or `devcore.<tailnet-name>.ts.net` via MagicDNS); add a Tailscale ACL restricting the laptop to just port 22 + the Metabase/Grafana ports.
+- **Follow-up:** replace the LAN IP in `~/.ssh/config` with the server's tailnet IP (or `<hostname>.<tailnet-name>.ts.net` via MagicDNS); add a Tailscale ACL restricting the laptop to just port 22 + the Metabase/Grafana ports.
 - **Priority:** **P1** - enables off-LAN work; not on the critical path of the next PR but needed before any travel/Mac move.
 
 ---
