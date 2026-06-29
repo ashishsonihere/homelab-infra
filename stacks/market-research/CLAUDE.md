@@ -134,9 +134,11 @@ docker run --rm --network devcore_net --memory=3g --env-file "$ENVF" \
 
 
 ## Known issues / gaps (don't re-discover these)
-- Tier-3 `upsert_statement` has a cosmetic `ON CONFLICT (cluster_id) WHERE cluster_id IS NULL` that is **harmless** (NULLs are distinct → no cap; the 15 statements were a tiny proof run, not a bug). Clean it to a plain `INSERT … RETURNING id`.
+- Tier-3 `upsert_statement` has a cosmetic `ON CONFLICT (cluster_id) WHERE cluster_id IS NULL` that is **harmless** (NULLs are distinct → no cap; the 15 statements were a tiny proof run, not a bug). Clean it to a plain `INSERT … RETURNING id`. TB-I added an `xfail(strict=True)` test (`test_upsert_statement_idempotent_no_duplicates`) that reproduces the dedup no-op; flip it to a real assertion once upsert dedups on statement text (+ a `UNIQUE(statement)` constraint).
 - Tier-4 does **no web validation** despite its docstring (`AN_TIER4_WEB_SEARCH` unused) — scores are LLM-only. Implement real web evidence for v2, or rename the claim so we're honest about what the score means.
 - **Schema-as-code gaps (TB-A rescues):** `funded_companies`/`vc_firms` exist live with no DDL in repo; 3 drift columns not in committed DDL (`reddit_comments.parent_id`, `pain_signals.deduped`, `problem_clusters.cluster_key`). Capture before any fresh deploy.
+- **Connector module drift (TB-A rescues):** `connectors/saashub.py`, `shopify_reviews.py`, `funding.py` (+ their tests `test_saashub.py`/`test_shopify_reviews.py`/`test_funding.py` + `connectors/funding_schema.sql`) exist on the devcore deploy dir but are NOT committed to this repo. `test_connector_smoke.py` (TB-I) detects them dynamically via `find_spec` → covered on the server, skipped from a pure checkout. Rescue into git before any fresh deploy.
+- `pain_signals_priority` **expression index can overflow `integer`**: `((GREATEST(COALESCE(score,0),0)+1) * dup_count) DESC` is typed `integer`, so a large `score*dup_count` (e.g. 999999×999999) raises `NumericValueOutOfRange` on INSERT. Latent (real scores are small) but unguarded; cast to `bigint` in the index expression if large values ever appear. TB-I e2e uses small values (99×99) to avoid it.
 - `homelab-vault/Scraper-Registry.md` is stale — DATA-DICTIONARY.md supersedes it.
 - `mr-worker:lite` is **not built by compose** — `run_feeds.sh`/`bd_run.sh` fail unless you build it by hand. TB-C wires it in.
 - Every `mr-*` job is an ad-hoc `docker run`, not in compose → they leak as `Exited` containers instead of self-cleaning. TB-C fixes this.

@@ -6,6 +6,7 @@ The DB is FakeCursor from conftest.py. The idempotency test proves ON CONFLICT c
 import sys
 import os
 import json
+import re
 
 import pytest
 
@@ -233,3 +234,126 @@ def test_final_score_normal():
     })
     final = 0.5 * 4 + 0.3 * 3 + 0.2 * 2
     assert abs(final - 3.3) < 0.01
+
+
+# ---------------------------------------------------------------------------
+# Tier-3: upsert_statement against an extended FakeCursor
+# ---------------------------------------------------------------------------
+# upsert_statement issues:
+#   INSERT INTO analysis.problem_statements (cluster_id, statement, ...)
+#   VALUES (NULL, %s, ...) ON CONFLICT (cluster_id) WHERE cluster_id IS NULL DO NOTHING
+#   RETURNING id
+#
+# In real Postgres, NULLs are distinct in a unique index, so that ON CONFLICT clause is a
+# NO-OP (documented in AGENTS.md Known issues: "cosmetic/harmless, no cap; clean it to a
+# plain INSERT ... RETURNING id"). ProblemStatementCursor mirrors that reality: every
+# INSERT creates a fresh row + returns a new id (no cap, no dedup). This keeps the "not
+# capped" and "returns id" tests faithful to live DB behavior. The flip side — that two
+# identical inserts DO create a duplicate — is captured by the xfailed idempotency test.
+class ProblemStatementCursor(FakeCursor):
+    """FakeCursor for analysis.problem_statements, emulating real Postgres NULL-distinct.
+
+    Keys rows by a synthetic id (each insert is distinct, as real Postgres treats multiple
+    NULL cluster_id values as distinct) and honours RETURNING id via fetchone().
+    """
+
+    def __init__(self):
+        super().__init__()
+        self._next_id = 1
+
+    @staticmethod
+    def _table(sql):
+        # FakeCursor._table uses \w+ and chokes on the schema-qualified target
+        # "analysis.problem_statements"; accept dotted names here.
+        m = re.search(r'(?:INSERT INTO|UPDATE)\s+([\w.]+)', sql, re.I)
+        return m.group(1) if m else None
+
+    def execute(self, sql, params=None):
+        table = self._table(sql)
+        if re.match(r'\s*INSERT', sql, re.I) and table == "analysis.problem_statements":
+            # VALUES = (NULL, statement, icp, jtbd, workaround, wtp_json, severity,
+            #           frequency_note, pre_score, model); cluster_id is always NULL.
+            row = (None,) + tuple(params)
+            new_id = self._next_id
+            self.store[("analysis.problem_statements", new_id)] = row
+            self._result = [(new_id,)]      # RETURNING id
+            self.new_inserts += 1
+            self.rowcount = 1
+            self._next_id += 1
+        else:
+            super().execute(sql, params)
+
+    def count(self, table):
+        # table is schema-qualified ("analysis.problem_statements") here.
+        return sum(1 for (t, _id) in self.store if t == table)
+
+
+@pytest.fixture
+def ps_cursor():
+    return ProblemStatementCursor()
+
+
+def _make_statement(text="Manual inventory sync across channels causes overselling and lost revenue"):
+    return t3.ProblemStatement.model_validate({
+        "icp": "ecom",
+        "job_to_be_done": "sync inventory across sales channels",
+        "statement": text,
+        "current_workaround": "spreadsheets reconciled by hand",
+        "wtp_quotes": ["I would pay $200/mo to never oversell again"],
+        "severity": 4,
+        "frequency_note": "daily during sales seasons",
+        "supporting_signal_ids": [1, 2],
+    })
+
+
+def test_upsert_statement_not_capped(ps_cursor):
+    """Multiple DISTINCT statements (all cluster_id=NULL) all insert -> no cap.
+
+    Real Postgres treats NULLs as distinct in UNIQUE(cluster_id), so the cosmetic
+    `ON CONFLICT (cluster_id) WHERE cluster_id IS NULL DO NOTHING` never fires: there
+    is no cap on how many NULL-cluster_id rows can coexist.
+    """
+    stmts = [
+        _make_statement("Inventory sync across Shopify and Amazon causes overselling during sales"),
+        _make_statement("Generating client reports by hand eats six hours every Monday morning"),
+        _make_statement("Reconciling refunds across marketplaces is a spreadsheet nightmare weekly"),
+    ]
+    ids = [t3.upsert_statement(ps_cursor, s, s.supporting_signal_ids, "test-model") for s in stmts]
+    assert all(i is not None for i in ids), "every distinct statement should insert and return an id"
+    assert len(set(ids)) == 3, "ids must be distinct (not capped to one)"
+    assert ps_cursor.count("analysis.problem_statements") == 3
+    assert ps_cursor.new_inserts == 3
+
+
+def test_upsert_statement_returns_new_id(ps_cursor):
+    """upsert_statement returns the new row id via RETURNING (not None)."""
+    stmt = _make_statement()
+    sid = t3.upsert_statement(ps_cursor, stmt, stmt.supporting_signal_ids, "test-model")
+    assert sid is not None
+    assert isinstance(sid, int)
+    assert sid > 0
+    assert ps_cursor.count("analysis.problem_statements") == 1
+    assert ps_cursor.new_inserts == 1
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="KNOWN ISSUE (AGENTS.md): upsert_statement's ON CONFLICT (cluster_id) WHERE "
+           "cluster_id IS NULL is a no-op because NULLs are distinct in a unique index, so a "
+           "second identical insert DOES create a duplicate. Dedup requires ON CONFLICT on the "
+           "statement text plus a UNIQUE(statement) constraint (schema change, out of scope for "
+           "TB-I). This xfail reproduces the bug; convert to a real assertion once upsert_statement "
+           "dedups, and delete this marker."
+)
+def test_upsert_statement_idempotent_no_duplicates(ps_cursor):
+    """Calling upsert_statement twice with identical data must NOT create a duplicate.
+
+    Currently FAILS (duplicates created) due to the known issue above -> xfail.
+    """
+    stmt = _make_statement()
+    sid1 = t3.upsert_statement(ps_cursor, stmt, stmt.supporting_signal_ids, "test-model")
+    sid2 = t3.upsert_statement(ps_cursor, stmt, stmt.supporting_signal_ids, "test-model")
+    # Desired contract: the second call is a no-op (dedup) — no new row, no fresh id.
+    assert ps_cursor.new_inserts == 1, "second identical insert should not create a new row"
+    assert ps_cursor.count("analysis.problem_statements") == 1
+    assert sid2 is None or sid2 == sid1, "second call should not return a fresh id"
