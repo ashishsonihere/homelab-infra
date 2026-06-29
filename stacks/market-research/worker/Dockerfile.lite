@@ -1,0 +1,8 @@
+# Lightweight worker image for API/RSS connectors (no browser/scraping deps).
+# Build:  docker build -f Dockerfile.lite -t mr-worker:lite .
+FROM python:3.12-slim
+WORKDIR /app
+RUN pip install --no-cache-dir httpx psycopg2-binary
+COPY connectors ./connectors
+COPY db ./db
+CMD ["python", "-m", "connectors.hackernews"]

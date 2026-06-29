@@ -1,0 +1,7 @@
+[
+  {"id": "Ugxc1", "parent": "root", "author": "@alice", "text": "Great video! I'd pay for an inventory sync tool.", "like_count": 42, "timestamp": 1287428400},
+  {"id": "Ugxc2", "parent": "root", "author": "@bob", "text": "Manual reconciliation is killing my margins.", "like_count": 7, "timestamp": 1287429000},
+  {"id": "Ugxc1.r1", "parent": "Ugxc1", "author": "@carol", "text": "Same here, +1 for that.", "like_count": 3, "timestamp": 1287430000},
+  {"id": "Ugxc1.r2", "parent": "Ugxc1", "author": "@dave", "text": "What tools have you tried?", "like_count": 1, "timestamp": 1287431000},
+  {"id": "Ugxc-noparent", "author": "@erin", "text": "Top-level with missing parent field.", "like_count": 0, "timestamp": 1287432000}
+]

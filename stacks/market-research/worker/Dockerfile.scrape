@@ -1,0 +1,15 @@
+# Scrape worker image — adds HTML-parsing + anti-bot libs on top of the lite deps.
+# Connectors are bind-mounted at /app, so no COPY needed.
+FROM python:3.12-slim
+# YouTube connector adds: yt-dlp (metadata+comments, no video download), youtube-transcript-api
+# (transcripts), pydantic (LLM output schema in youtube_analyze.py). Versions pinned in requirements.txt.
+# Analysis pipeline adds: numpy + scikit-learn (MiniBatchKMeans coarse cluster) + hdbscan (per-bucket
+# fine cluster). Ollama embeddings (Tier 1) are HTTP-only via httpx, no extra dep. build-essential is
+# needed to compile hdbscan's Cython extension; removed after install to keep the image lean.
+RUN pip install --no-cache-dir \
+    httpx psycopg2-binary selectolax google-play-scraper==1.2.7 curl_cffi \
+    yt-dlp==2025.6.9 youtube-transcript-api==1.0.3 pydantic==2.11.5 \
+    && apt-get update && apt-get install -y --no-install-recommends build-essential \
+    && pip install --no-cache-dir numpy==2.2.4 scikit-learn==1.7.0 hdbscan==0.8.40 \
+    && apt-get purge -y build-essential && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
+WORKDIR /app

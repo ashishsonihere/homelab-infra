@@ -1,0 +1,31 @@
+{
+  "id": "dQw4w9WgXcQ",
+  "title": "Never Gonna Give You Up",
+  "description": "The official video. Great for testing ecommerce attribution pain points.",
+  "duration": 213,
+  "view_count": 1600000000,
+  "like_count": 17000000,
+  "comment_count": 2200000,
+  "timestamp": 1287424800,
+  "upload_date": "20091025",
+  "channel_id": "UCuAXFkgsw1L7xaCfnd5JJOw",
+  "channel": "Rick Astley",
+  "uploader": "Rick Astley",
+  "uploader_id": "@RickAstleyYT",
+  "uploader_url": "https://www.youtube.com/@RickAstleyYT",
+  "channel_url": "https://www.youtube.com/channel/UCuAXFkgsw1L7xaCfnd5JJOw",
+  "channel_follower_count": 3900000,
+  "tags": ["rick astley", "never gonna give you up", "music"],
+  "formats": [{"format_id": "junk-we-trim"}],
+  "thumbnails": [{"url": "junk-we-trim"}],
+  "subtitles": {
+    "en": [
+      {"ext": "vtt", "url": "https://example.test/en.vtt"},
+      {"ext": "json3", "url": "https://example.test/en.json3"}
+    ]
+  },
+  "automatic_captions": {
+    "en": [{"ext": "json3", "url": "https://example.test/en.auto.json3"}],
+    "fr": [{"ext": "json3", "url": "https://example.test/fr.auto.json3"}]
+  }
+}

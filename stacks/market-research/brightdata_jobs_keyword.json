@@ -1,0 +1,40 @@
+[
+  {
+    "name": "KEYWORD-reddit-high-signal",
+    "track": "A",
+    "note": "High-signal: subreddit x keyword (relevance over upvotes). 8 subs x 12 kw x 10 posts = ~960 recs (~$1).",
+    "dataset_id": "gd_lvz8ah06191smkebj4",
+    "source_slug": "reddit",
+    "map": "reddit",
+    "discover_by": "subreddit_url",
+    "expand_keywords": true,
+    "sort_by": "New",
+    "sort_by_time": "All Time",
+    "num_of_posts": 10,
+    "limit": 10,
+    "subreddits": [
+      "https://www.reddit.com/r/ecommerce/",
+      "https://www.reddit.com/r/shopify/",
+      "https://www.reddit.com/r/FulfillmentByAmazon/",
+      "https://www.reddit.com/r/PPC/",
+      "https://www.reddit.com/r/SaaS/",
+      "https://www.reddit.com/r/agency/",
+      "https://www.reddit.com/r/dropshipping/",
+      "https://www.reddit.com/r/Entrepreneur/"
+    ],
+    "keywords": [
+      "tool recommendation",
+      "alternative to",
+      "wish there was",
+      "still doing manually",
+      "spreadsheet",
+      "automate",
+      "too expensive",
+      "what do you use for",
+      "best tool for",
+      "switching from",
+      "overpaying",
+      "frustrated with"
+    ]
+  }
+]

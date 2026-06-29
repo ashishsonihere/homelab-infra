@@ -1,159 +1,186 @@
--- Market-Research Scraper — Postgres schema
--- Run once against a dedicated DB:  CREATE DATABASE market_research;  \c market_research
--- Requires the pgvector extension (your postgres image already ships it).
---
--- Design goals:
---   * Capture ecommerce help/community content: questions, answers, comments, ratings, sections.
---   * Keep raw blobs in MinIO; store only structured rows + references here.
---   * Support BOTH retrieval modes: full-text (tsvector) and semantic (pgvector).
---   * Roll structured signals up into market-research insights (features, pain points, sentiment).
+-- Market-Research DB — Reddit-first, multi-source, RAG-ready.
+-- Run:  CREATE DATABASE market_research;  \c market_research  then run this file.
+-- Image pgvector/pgvector:pg16 → gen_random_uuid() is built-in (no uuid-ossp needed).
 
 CREATE EXTENSION IF NOT EXISTS vector;
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
 -- ---------------------------------------------------------------------------
--- 1. Sources & crawl orchestration
+-- 0. Source registry + crawl queue mirror
 -- ---------------------------------------------------------------------------
-
--- A platform you point the scraper at (you provide the base URL).
 CREATE TABLE sources (
-    id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    slug        text UNIQUE NOT NULL,         -- e.g. 'shopify_help', 'triple_whale'
-    name        text NOT NULL,                -- 'Shopify Help Center'
-    base_url    text NOT NULL,                -- 'https://help.shopify.com'
-    kind        text NOT NULL,                -- 'help_center' | 'community' | 'reviews' | 'docs'
-    robots_ok   boolean DEFAULT true,         -- respect robots.txt / ToS (set per source)
-    rate_limit_rpm int DEFAULT 20,            -- be polite: requests/minute
-    enabled     boolean DEFAULT true,
-    created_at  timestamptz DEFAULT now()
+    id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    slug       text UNIQUE NOT NULL,          -- 'reddit', 'shopify_help', 'amazon'
+    name       text NOT NULL,
+    kind       text NOT NULL,                 -- 'community' | 'help_center' | 'reviews'
+    base_url   text,
+    enabled    boolean DEFAULT true,
+    created_at timestamptz DEFAULT now()
 );
 
--- The crawl frontier / queue mirror (Redis holds the live queue; this is the durable log).
 CREATE TABLE crawl_jobs (
+    id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    source_id  uuid REFERENCES sources(id) ON DELETE CASCADE,
+    ref        text NOT NULL,                 -- post id / url / asin
+    status     text NOT NULL DEFAULT 'queued',-- queued|fetching|done|error
+    error      text,
+    queued_at  timestamptz DEFAULT now(),
+    done_at    timestamptz,
+    UNIQUE (source_id, ref)
+);
+
+-- ---------------------------------------------------------------------------
+-- 1. Reddit (priority 1) — posts + nested comment trees (recursive CTE)
+-- ---------------------------------------------------------------------------
+CREATE TABLE reddit_posts (
+    id          bigserial PRIMARY KEY,
+    reddit_id   varchar(15) UNIQUE NOT NULL,
+    subreddit   text NOT NULL,
+    title       text NOT NULL,
+    selftext    text,
+    author      text,
+    score       int,
+    upvote_ratio numeric,
+    num_comments int,
+    url         text,
+    flair       text,
+    created_utc bigint,
+    fetched_at  timestamptz DEFAULT now()
+);
+CREATE INDEX reddit_posts_sub_idx ON reddit_posts (subreddit, created_utc);
+
+CREATE TABLE reddit_comments (
+    id               bigserial PRIMARY KEY,
+    post_id          bigint REFERENCES reddit_posts(id) ON DELETE CASCADE,
+    reddit_id        varchar(15) UNIQUE NOT NULL,
+    parent_reddit_id varchar(15),             -- comment id (t1_) or post id (t3_), stripped
+    body             text,
+    author           text,
+    score            int,
+    depth            smallint,
+    awards           int DEFAULT 0,
+    created_utc      bigint,
+    body_tsv         tsvector GENERATED ALWAYS AS (to_tsvector('english', coalesce(body,''))) STORED,
+    fetched_at       timestamptz DEFAULT now()
+);
+CREATE INDEX reddit_comments_post_idx   ON reddit_comments (post_id, parent_reddit_id);
+CREATE INDEX reddit_comments_tsv_idx    ON reddit_comments USING gin (body_tsv);
+-- Rebuild a full thread:  WITH RECURSIVE t AS ( ...roots... UNION ALL ...children... ) SELECT * FROM t;
+
+-- ---------------------------------------------------------------------------
+-- 2. Shopify Help / community (priority 2)
+-- ---------------------------------------------------------------------------
+CREATE TABLE shopify_articles (
+    id         bigserial PRIMARY KEY,
+    url        text UNIQUE NOT NULL,
+    title      text,
+    section    text,
+    body       text,
+    tags       text[] DEFAULT '{}',
+    updated_at timestamptz,
+    fetched_at timestamptz DEFAULT now()
+);
+
+-- ---------------------------------------------------------------------------
+-- 3. Amazon (priority 3, limited)
+-- ---------------------------------------------------------------------------
+CREATE TABLE amazon_products (
+    id          bigserial PRIMARY KEY,
+    asin        varchar(12) UNIQUE NOT NULL,
+    title       text,
+    brand       text,
+    price       numeric,
+    rating      numeric,
+    num_reviews int,
+    url         text,
+    fetched_at  timestamptz DEFAULT now()
+);
+CREATE TABLE amazon_reviews (
+    id          bigserial PRIMARY KEY,
+    product_id  bigint REFERENCES amazon_products(id) ON DELETE CASCADE,
+    rating      int,
+    title       text,
+    body        text,
+    helpful     int DEFAULT 0,
+    verified    boolean,
+    created_at  timestamptz,
+    fetched_at  timestamptz DEFAULT now()
+);
+
+-- ---------------------------------------------------------------------------
+-- 4. Media (blobs in MinIO; refs here, link to any owner)
+-- ---------------------------------------------------------------------------
+CREATE TABLE media (
     id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    source_id   uuid NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
-    url         text NOT NULL,
-    status      text NOT NULL DEFAULT 'queued', -- queued|fetching|done|error|skipped
-    depth       int DEFAULT 0,
-    error       text,
-    queued_at   timestamptz DEFAULT now(),
-    fetched_at  timestamptz,
-    UNIQUE (source_id, url)
+    owner_kind  text NOT NULL,                -- 'reddit_post'|'reddit_comment'|'amazon_review'
+    owner_id    bigint NOT NULL,
+    src_url     text,
+    minio_path  text,                         -- 'market-research/reddit/<id>.jpg'
+    media_type  text,
+    bytes       bigint,
+    fetched_at  timestamptz DEFAULT now()
 );
 
 -- ---------------------------------------------------------------------------
--- 2. Raw pages (blob in MinIO, metadata here)
--- ---------------------------------------------------------------------------
-CREATE TABLE pages (
-    id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    source_id     uuid NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
-    url           text NOT NULL,
-    title         text,
-    section       text,                       -- breadcrumb / category, e.g. 'Payments > Payouts'
-    http_status   int,
-    content_hash  text,                        -- dedupe identical fetches
-    minio_path    text,                        -- 's3://market-research/raw/shopify_help/<id>.html'
-    fetched_at    timestamptz DEFAULT now(),
-    UNIQUE (source_id, url, content_hash)
-);
-
--- ---------------------------------------------------------------------------
--- 3. Structured discussion content (the heart of it)
--- ---------------------------------------------------------------------------
-
--- A thread = one question/topic/review unit on a page.
-CREATE TABLE threads (
-    id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    source_id    uuid NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
-    page_id      uuid REFERENCES pages(id) ON DELETE SET NULL,
-    external_id  text,                          -- platform's own id if present
-    url          text,
-    title        text,
-    section      text,                          -- topic/category section
-    author       text,
-    is_answered  boolean,
-    rating       numeric,                       -- stars (reviews) — nullable
-    score        int,                           -- upvotes/likes/helpful count
-    view_count   int,
-    posted_at    timestamptz,
-    tags         text[] DEFAULT '{}',
-    created_at   timestamptz DEFAULT now(),
-    UNIQUE (source_id, external_id)
-);
-
--- A post = a unit inside a thread: the question body, an answer, or a comment/review.
-CREATE TABLE posts (
-    id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    thread_id    uuid NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
-    role         text NOT NULL,                 -- 'question' | 'answer' | 'comment' | 'review'
-    author       text,
-    body         text NOT NULL,
-    rating       numeric,                       -- per-review stars if applicable
-    score        int,                           -- helpful/upvotes
-    is_accepted  boolean DEFAULT false,         -- accepted answer / official reply
-    posted_at    timestamptz,
-    body_tsv     tsvector GENERATED ALWAYS AS (to_tsvector('english', coalesce(body,''))) STORED,
-    created_at   timestamptz DEFAULT now()
-);
-CREATE INDEX posts_body_tsv_idx ON posts USING gin (body_tsv);
-CREATE INDEX posts_thread_idx   ON posts (thread_id);
-
--- ---------------------------------------------------------------------------
--- 4. Chunks for RAG (semantic + keyword). Embeddings filled via CLOUD API (no GPU).
+-- 5. Unified RAG layer — chunk any text, embed (local Ollama), hybrid search
 -- ---------------------------------------------------------------------------
 CREATE TABLE chunks (
-    id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    post_id      uuid REFERENCES posts(id) ON DELETE CASCADE,
-    page_id      uuid REFERENCES pages(id) ON DELETE CASCADE,
-    content      text NOT NULL,
-    token_count  int,
-    embedding    vector(1536),                  -- match EMBEDDING_DIM in .env
-    content_tsv  tsvector GENERATED ALWAYS AS (to_tsvector('english', coalesce(content,''))) STORED,
-    metadata     jsonb DEFAULT '{}',
-    created_at   timestamptz DEFAULT now()
+    id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    source_slug text,                         -- 'reddit'|'shopify_help'|'amazon'
+    owner_kind  text,                         -- which table the text came from
+    owner_id    bigint,
+    content     text NOT NULL,
+    token_count int,
+    embedding   vector(768),                  -- nomic-embed-text (Ollama) = 768 dims
+    content_tsv tsvector GENERATED ALWAYS AS (to_tsvector('english', coalesce(content,''))) STORED,
+    metadata    jsonb DEFAULT '{}',
+    created_at  timestamptz DEFAULT now()
 );
 CREATE INDEX chunks_embedding_idx ON chunks USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
 CREATE INDEX chunks_tsv_idx       ON chunks USING gin (content_tsv);
 
 -- ---------------------------------------------------------------------------
--- 5. Market-research signal layer (the "why we scrape" payoff)
+-- 6. Research output — signals → insights (the payoff)
 -- ---------------------------------------------------------------------------
-
--- Extracted signals: a pain point, feature request, complaint, praise, workaround...
 CREATE TABLE signals (
-    id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    source_id     uuid REFERENCES sources(id) ON DELETE SET NULL,
-    post_id       uuid REFERENCES posts(id) ON DELETE SET NULL,
-    type          text NOT NULL,                -- 'pain_point'|'feature_request'|'complaint'|'praise'|'workaround'|'pricing'
-    topic         text,                         -- normalized topic, e.g. 'checkout', 'shipping', 'analytics'
-    summary       text NOT NULL,
-    sentiment     numeric,                      -- -1.0 .. 1.0
-    severity      int,                          -- 1..5 (how painful / how often it recurs)
-    evidence_url  text,
-    created_at    timestamptz DEFAULT now()
+    id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    source_slug  text,
+    owner_kind   text,
+    owner_id     bigint,
+    type         text NOT NULL,               -- pain_point|feature_request|complaint|praise|pricing|workaround
+    topic        text,
+    summary      text NOT NULL,
+    sentiment    numeric,                     -- -1..1
+    severity     int,                         -- 1..5
+    evidence_url text,
+    created_at   timestamptz DEFAULT now()
 );
 CREATE INDEX signals_topic_idx ON signals (topic);
 CREATE INDEX signals_type_idx  ON signals (type);
 
--- Aggregated insights that drive the product decision (what to ship in ~3 months).
 CREATE TABLE insights (
     id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     title         text NOT NULL,
     topic         text,
-    quant_summary jsonb,                         -- counts, frequency, avg sentiment, top sources
-    qual_summary  text,                          -- the narrative interpretation
-    opportunity   text,                          -- product/feature implication
+    quant_summary jsonb,                       -- counts, freq, avg sentiment, top sources
+    qual_summary  text,
+    opportunity   text,                        -- product/feature implication (VC-fundable?)
+    tech_viability text,
     confidence    numeric,
     created_at    timestamptz DEFAULT now()
 );
 
--- Handy view: most common pain points by topic (quantitative starting point).
+-- Quant starting points
 CREATE VIEW v_top_pain_points AS
-SELECT topic,
-       count(*)              AS mentions,
-       round(avg(sentiment)::numeric, 2) AS avg_sentiment,
-       round(avg(severity)::numeric, 2)  AS avg_severity
-FROM signals
-WHERE type IN ('pain_point','complaint','feature_request')
-GROUP BY topic
-ORDER BY mentions DESC;
+SELECT topic, count(*) AS mentions,
+       round(avg(sentiment)::numeric,2) AS avg_sentiment,
+       round(avg(severity)::numeric,2)  AS avg_severity
+FROM signals WHERE type IN ('pain_point','complaint','feature_request')
+GROUP BY topic ORDER BY mentions DESC;
+
+-- Seed the three sources
+INSERT INTO sources (slug, name, kind, base_url) VALUES
+ ('reddit','Reddit','community','https://www.reddit.com'),
+ ('shopify_help','Shopify Help Center','help_center','https://help.shopify.com'),
+ ('amazon','Amazon','reviews','https://www.amazon.com')
+ON CONFLICT (slug) DO NOTHING;

@@ -1,0 +1,9 @@
+{
+  "events": [
+    {"tStartMs": 0, "dDurationMs": 2500, "segs": [{"utf8": "Hey everyone "}, {"utf8": "welcome back"}]},
+    {"tStartMs": 2500, "dDurationMs": 3000, "segs": [{"utf8": "today we talk about inventory sync"}]},
+    {"tStartMs": 5500, "dDurationMs": 4000, "segs": [{"utf8": "and why merchants hate manual reconciliation"}]},
+    {"tStartMs": 9500, "dDurationMs": 0, "segs": [{"utf8": "\n"}]},
+    {"tStartMs": 9600, "dDurationMs": 100, "aAppend": 1}
+  ]
+}

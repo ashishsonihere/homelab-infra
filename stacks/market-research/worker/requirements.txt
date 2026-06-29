@@ -1,0 +1,16 @@
+praw==7.7.1
+psycopg2-binary==2.9.9
+boto3==1.34.69
+redis==5.0.1
+rq==1.16.1
+python-dotenv==1.0.1
+# --- YouTube connector (connectors/youtube.py + youtube_analyze.py) ---
+yt-dlp==2025.6.9
+youtube-transcript-api==1.0.3
+pydantic==2.11.5
+httpx==0.28.1
+# --- analysis pipeline Tier 1/2 (analysis/tier1_embed.py + tier2_cluster.py) ---
+# Ollama embeddings are reached over HTTP via httpx (above); clustering is local CPU sklearn+hdbscan.
+numpy==2.2.4
+scikit-learn==1.7.0
+hdbscan==0.8.40

@@ -1,0 +1,33 @@
+[
+  {
+    "name": "BACKFILL2-new-subs",
+    "track": "A+B",
+    "note": "The ~19 subs NOT in the first 12-sub backfill (marketing/analytics/startups/India). Avoids re-paying for the 12 already pulled.",
+    "dataset_id": "gd_lvz8ah06191smkebj4",
+    "source_slug": "reddit",
+    "map": "reddit",
+    "discover_by": "subreddit_url",
+    "limit": 200,
+    "inputs": [
+      {"url": "https://www.reddit.com/r/woocommerce/", "sort_by": "Top", "sort_by_time": "All Time", "num_of_posts": 200},
+      {"url": "https://www.reddit.com/r/bigcommerce/", "sort_by": "Top", "sort_by_time": "All Time", "num_of_posts": 200},
+      {"url": "https://www.reddit.com/r/Magento/", "sort_by": "Top", "sort_by_time": "All Time", "num_of_posts": 200},
+      {"url": "https://www.reddit.com/r/dropshipping/", "sort_by": "Top", "sort_by_time": "All Time", "num_of_posts": 200},
+      {"url": "https://www.reddit.com/r/Flipping/", "sort_by": "Top", "sort_by_time": "All Time", "num_of_posts": 200},
+      {"url": "https://www.reddit.com/r/EntrepreneurRideAlong/", "sort_by": "Top", "sort_by_time": "All Time", "num_of_posts": 200},
+      {"url": "https://www.reddit.com/r/FacebookAds/", "sort_by": "Top", "sort_by_time": "All Time", "num_of_posts": 200},
+      {"url": "https://www.reddit.com/r/googleads/", "sort_by": "Top", "sort_by_time": "All Time", "num_of_posts": 200},
+      {"url": "https://www.reddit.com/r/marketing/", "sort_by": "Top", "sort_by_time": "All Time", "num_of_posts": 200},
+      {"url": "https://www.reddit.com/r/DigitalMarketing/", "sort_by": "Top", "sort_by_time": "All Time", "num_of_posts": 200},
+      {"url": "https://www.reddit.com/r/SEO/", "sort_by": "Top", "sort_by_time": "All Time", "num_of_posts": 200},
+      {"url": "https://www.reddit.com/r/bigseo/", "sort_by": "Top", "sort_by_time": "All Time", "num_of_posts": 200},
+      {"url": "https://www.reddit.com/r/emailmarketing/", "sort_by": "Top", "sort_by_time": "All Time", "num_of_posts": 200},
+      {"url": "https://www.reddit.com/r/SocialMediaMarketing/", "sort_by": "Top", "sort_by_time": "All Time", "num_of_posts": 200},
+      {"url": "https://www.reddit.com/r/analytics/", "sort_by": "Top", "sort_by_time": "All Time", "num_of_posts": 200},
+      {"url": "https://www.reddit.com/r/GoogleAnalytics/", "sort_by": "Top", "sort_by_time": "All Time", "num_of_posts": 200},
+      {"url": "https://www.reddit.com/r/startups/", "sort_by": "Top", "sort_by_time": "All Time", "num_of_posts": 200},
+      {"url": "https://www.reddit.com/r/DigitalMarketingIndia/", "sort_by": "Top", "sort_by_time": "All Time", "num_of_posts": 200},
+      {"url": "https://www.reddit.com/r/StartUpIndia/", "sort_by": "Top", "sort_by_time": "All Time", "num_of_posts": 200}
+    ]
+  }
+]

@@ -1,0 +1,28 @@
+[
+  {
+    "name": "reddit-backfill-shopify",
+    "dataset_id": "gd_REPLACE_WITH_REDDIT_DATASET_ID",
+    "source_slug": "reddit",
+    "map": "reddit",
+    "mode": "backfill",
+    "discover_by": "keyword",
+    "limit": 2000,
+    "inputs": [
+      {"keyword": "shopify app", "start_date": "2020-01-01", "end_date": "2025-12-31"},
+      {"keyword": "amazon ppc", "start_date": "2020-01-01", "end_date": "2025-12-31"}
+    ]
+  },
+  {
+    "name": "reddit-daily-ecommerce",
+    "dataset_id": "gd_REPLACE_WITH_REDDIT_DATASET_ID",
+    "source_slug": "reddit",
+    "map": "reddit",
+    "mode": "daily",
+    "discover_by": "subreddit_url",
+    "limit": 200,
+    "inputs": [
+      {"url": "https://www.reddit.com/r/ecommerce/"},
+      {"url": "https://www.reddit.com/r/shopify/"}
+    ]
+  }
+]

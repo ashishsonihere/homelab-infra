@@ -11,11 +11,23 @@ key.txt
 keys.txt
 age-key*.txt
 *.key
+*.pem
 
 # Decrypted secret outputs
 secrets.dec.*
 *.dec.yaml
 *.dec.yml
+
+# === Python ===
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
 
 # === Local junk ===
 .DS_Store
@@ -23,8 +35,16 @@ Thumbs.db
 *.log
 *.bak
 *.tmp
+*.swp
+*.swo
 
 # Docker / runtime data that should live on the server, not in git
 data/
 volumes/
 *.sqlite
+
+# Seed data files (large, server-only)
+seeds/*.txt
+
+# Private vault (separate repo, never push here)
+../homelab-vault/
